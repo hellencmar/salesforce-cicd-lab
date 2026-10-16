@@ -1,0 +1,33 @@
+<template>
+    <lightning-card title="Buscar contas" icon-name="standard:account">
+        <div class="slds-p-horizontal_small">
+            <lightning-input
+                type="search"
+                label="Nome da conta"
+                value={termo}
+                onchange={handleTermo}
+            ></lightning-input>
+            <lightning-button
+                class="slds-m-top_small"
+                label="Buscar"
+                variant="brand"
+                disabled={buscaDesabilitada}
+                onclick={handleBuscar}
+            ></lightning-button>
+
+            <template lwc:if={erro}>
+                <p class="erro slds-text-color_error slds-m-top_small">{erro}</p>
+            </template>
+            <template lwc:if={temContas}>
+                <ul class="slds-m-top_small">
+                    <template for:each={contas} for:item="conta">
+                        <li key={conta.Id} class="conta">{conta.Name}</li>
+                    </template>
+                </ul>
+            </template>
+            <template lwc:if={semResultado}>
+                <p class="vazio slds-m-top_small">Nenhuma conta encontrada.</p>
+            </template>
+        </div>
+    </lightning-card>
+</template>
