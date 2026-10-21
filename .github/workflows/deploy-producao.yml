@@ -19,16 +19,43 @@ jobs:
     runs-on: ubuntu-latest
     environment: producao
     steps:
+      # O SGD compara commits: precisa do histórico inteiro, não só do último commit.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
 
-      - name: Instalar Salesforce CLI
-        run: npm install --global @salesforce/cli
+      - name: Instalar Salesforce CLI e sfdx-git-delta
+        run: |
+          npm install --global @salesforce/cli
+          echo y | sf plugins install sfdx-git-delta
+
+      # "Antes" = onde a main estava antes do push. Rodando à mão (workflow_dispatch)
+      # não existe "antes", então compara com o commit anterior.
+      - name: Calcular o que mudou na main
+        id: delta
+        env:
+          ANTES: ${{ github.event.before }}
+        run: |
+          if [ -z "$ANTES" ] || [ "$ANTES" = "0000000000000000000000000000000000000000" ]; then
+            ANTES="HEAD~1"
+          fi
+          mkdir delta
+          sf sgd source delta --from "$ANTES" --to HEAD --output-dir delta
+          echo "--- package.xml"; cat delta/package/package.xml
+          echo "--- destructiveChanges.xml"; cat delta/destructiveChanges/destructiveChanges.xml
+          if grep -q "<types>" delta/package/package.xml delta/destructiveChanges/destructiveChanges.xml; then
+            echo "tem_mudanca=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tem_mudanca=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Nenhum metadado Salesforce mudou. Nada para fazer deploy em Produção."
+          fi
 
       - name: Login em Produção (JWT)
+        if: steps.delta.outputs.tem_mudanca == 'true'
         env:
           SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
           SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
@@ -44,5 +71,12 @@ jobs:
             --alias producao
           rm "$RUNNER_TEMP/server.key"
 
-      - name: Deploy rodando os testes Apex
-        run: sf project deploy start --source-dir force-app --target-org producao --test-level RunLocalTests --wait 30
+      - name: Deploy só do que mudou, rodando os testes Apex
+        if: steps.delta.outputs.tem_mudanca == 'true'
+        run: |
+          sf project deploy start \
+            --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --target-org producao \
+            --test-level RunLocalTests \
+            --wait 30
