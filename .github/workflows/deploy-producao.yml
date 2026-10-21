@@ -1,0 +1,48 @@
+name: Deploy em Produção
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deploys entram em fila: um deploy em Produção nunca é cancelado no meio.
+concurrency:
+  group: deploy-producao
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy em Produção
+    runs-on: ubuntu-latest
+    environment: producao
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Instalar Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Login em Produção (JWT)
+        env:
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_USERNAME: ${{ vars.SF_USERNAME }}
+          SF_INSTANCE_URL: ${{ vars.SF_INSTANCE_URL }}
+        run: |
+          echo "$SF_JWT_KEY" > "$RUNNER_TEMP/server.key"
+          sf org login jwt \
+            --client-id "$SF_CLIENT_ID" \
+            --jwt-key-file "$RUNNER_TEMP/server.key" \
+            --username "$SF_USERNAME" \
+            --instance-url "$SF_INSTANCE_URL" \
+            --alias producao
+          rm "$RUNNER_TEMP/server.key"
+
+      - name: Deploy rodando os testes Apex
+        run: sf project deploy start --source-dir force-app --target-org producao --test-level RunLocalTests --wait 30
