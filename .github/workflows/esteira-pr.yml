@@ -47,7 +47,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Instalar Salesforce CLI e Code Analyzer
         run: |
@@ -70,16 +70,36 @@ jobs:
     runs-on: ubuntu-latest
     environment: qa
     steps:
+      # O SGD compara commits: precisa do histórico inteiro, não só do último commit.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
 
-      - name: Instalar Salesforce CLI
-        run: npm install --global @salesforce/cli
+      - name: Instalar Salesforce CLI e sfdx-git-delta
+        run: |
+          npm install --global @salesforce/cli
+          echo y | sf plugins install sfdx-git-delta
+
+      - name: Calcular o que o PR muda
+        id: delta
+        run: |
+          mkdir delta
+          sf sgd source delta --from "origin/${{ github.base_ref }}" --to HEAD --output-dir delta
+          echo "--- package.xml"; cat delta/package/package.xml
+          echo "--- destructiveChanges.xml"; cat delta/destructiveChanges/destructiveChanges.xml
+          if grep -q "<types>" delta/package/package.xml delta/destructiveChanges/destructiveChanges.xml; then
+            echo "tem_mudanca=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tem_mudanca=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::O PR não muda nenhum metadado Salesforce. Nada para validar no QA."
+          fi
 
       - name: Login no QA (JWT)
+        if: steps.delta.outputs.tem_mudanca == 'true'
         env:
           SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
           SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
@@ -95,5 +115,12 @@ jobs:
             --alias qa
           rm "$RUNNER_TEMP/server.key"
 
-      - name: Validar deploy rodando os testes Apex
-        run: sf project deploy validate --source-dir force-app --target-org qa --test-level RunLocalTests --wait 30
+      - name: Validar só o que mudou, rodando os testes Apex
+        if: steps.delta.outputs.tem_mudanca == 'true'
+        run: |
+          sf project deploy validate \
+            --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --target-org qa \
+            --test-level RunLocalTests \
+            --wait 30
